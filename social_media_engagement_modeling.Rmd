@@ -1,0 +1,691 @@
+---
+title: "Project_KOH_HONG"
+author: "Tito KOH et Kimmeng HONG"
+date: "2024-11-29"
+output: html_document
+---
+## Import Library
+
+```{r}
+library(caret)
+library(corrplot)
+library(glmnet)
+library(ggplot2)
+library(dplyr)
+```
+
+## Data Preprocessing
+
+```{r}
+tab = read.table("D:\\ENSIIE_M1\\MERRE\\Projet\\dataset.csv", header = T, sep = ";")
+head(tab)
+```
+
+```{r}
+str(tab)
+```
+```{r}
+#cleaning all empty values row and row
+tab = na.omit(tab)
+sum(is.na(tab))
+```
+
+```{r}
+tab$Type = as.factor(tab$Type)
+tab$Type = as.integer(tab$Type)
+
+str(tab$Type)
+```
+
+## Model Building (Finding target variable)
+### Outliers Detection (On target variables)
+
+We want to find the target variable by assuming the target variable one by one in oputput variables, and train it with the remaining input variables.
+the output variables are "Lifetime.Post.Total.Reach", "Lifetime.Post.Total.Impressions", "Lifetime.Engaged.Users", "Lifetime.Post.Consumers", "Lifetime.Post.Consumptions", "Lifetime.Post.Impressions.by.people.who.have.liked.your.Page", "Lifetime.Post.reach.by.people.who.like.your.Page", "Lifetime.People.who.have.liked.your.Page.and.engaged.with.your.post", "comment", "like", "share" and "Total.Interactions".
+
+Firstly, we need to get rid of the outliers of potential target variables. We do this by applying Interquartile Range. Here is the visualization of outliers of each potential target variables. 
+
+```{r}
+#checking for outlier for all output variables
+for(i in 8:19){
+  boxplot(tab[i])
+  mtext(names(tab)[i], side = 3, line = -1, cex = 0.8)
+}
+
+```
+
+Define a Function by Applying the Interquartile Range method and removing outliers from target variables:
+
+```{r}
+detect_outliers <- function(col){
+  #calculate IQR and remove outliers
+  q1 = quantile(col, 0.25)
+  q3 = quantile(col, 0.75)  # Correct quantile calculation
+  iqr = q3 - q1
+  outliers = col < (q1 - 1.5 * iqr) | col > (q3 + 1.5 * iqr)
+  return (outliers)
+}
+```
+
+
+### Forward Selection with Cross Validation to validate the performance
+```{r}
+print("Forward Selection")
+
+for (k in 8:19) {
+  cat("\n")
+  print(paste("Target variable: ", colnames(tab)[k]))
+  
+  # Remove outliers of output variable "k"
+  outliers =  detect_outliers(tab[, k])
+  
+  # subset the data to remove outliers and contain only input variables(col 1:7 and k-th target variable)
+  new_data = tab[!outliers, c(1:7, k)]  
+  
+  # split data in 80:20 ratio
+  set.seed(4)
+  n = nrow(new_data)
+  train_index = sample(1:n, size = floor(0.8 * n))
+  train_data = new_data[train_index, ]
+  test_data = new_data[-train_index, ]
+  
+  #define the response variable and predictor variables
+  target_variable = colnames(tab)[k]
+  
+  #train the model on the training set
+  model_init = lm(as.formula(paste(target_variable, "~ 1")), data = train_data)
+  model_full = lm(as.formula(paste(target_variable, "~ .")), data = train_data)
+  
+  #perform stepwise regression
+  model_re = step(model_init, direction = "forward", scope = list(lower = model_init, upper = model_full), trace = FALSE)
+  
+  # Define a custom summary function to include MAPE
+  custom_summary <- function(data, lev = NULL, model = NULL) {
+    if (all(data$obs != 0)){
+      MAPE <- mean(abs((data$obs - data$pred) / (data$obs)))
+    } else{
+      MAPE <- mean(abs((data$obs - data$pred) / (data$obs + 0.01)))
+    }
+    c(MAPE = MAPE, RMSE = RMSE(data$obs, data$pred), Rsquared = R2(data$obs, data$pred))
+  }
+  
+  # Define 10-fold cross-validation
+  train_control <- trainControl(method = "cv", number = 10, summaryFunction = custom_summary)
+  final_formula <- formula(model_re)
+  forward_cv <- train(
+    final_formula,
+    data = train_data, 
+    method = "lm",
+    trControl = train_control, # Cross-validation control
+  )
+  
+  # Extract cross-validated metrics
+  cat("Model:", deparse(model_re$call$formula), "\n")
+  cat("CV R^2:", forward_cv$results$Rsquared, "\n")
+  cat("CV RMSE:", forward_cv$results$RMSE, "\n")
+  cat("CV MAPE:", forward_cv$results$MAPE, "\n")
+}
+```
+
+### Backward Selection with Cross Validation to validate the performance
+```{r}
+print("Backward Selection")
+
+for (k in 8:19) {
+  cat("\n")
+  print(paste("Target variable: ", colnames(tab)[k]))
+  
+  # Remove outliers of output variable "k"
+  outliers =  detect_outliers(tab[, k])
+  
+  # subset the data to remove outliers and contain only input variables(col 1:7 and k-th target variable)
+  new_data = tab[!outliers, c(1:7, k)]  
+  
+  # split data in 80:20 ratio
+  set.seed(4)
+  n = nrow(new_data)
+  train_index = sample(1:n, size = floor(0.8 * n))
+  train_data = new_data[train_index, ]
+  test_data = new_data[-train_index, ]
+  
+  #define the response variable and predictor variables
+  target_variable = colnames(tab)[k]
+  
+  #train the model on the training set
+  model_full = lm(as.formula(paste(target_variable, "~ .")), data = train_data)
+  
+  #perform stepwise regression
+  model_re = step(model_full, direction = "backward", trace = FALSE)
+  
+  # Define a custom summary function to include MAPE
+  custom_summary <- function(data, lev = NULL, model = NULL) {
+    if (all(data$obs != 0)){
+      MAPE <- mean(abs((data$obs - data$pred) / (data$obs)))
+    } else{
+      MAPE <- mean(abs((data$obs - data$pred) / (data$obs + 0.01)))
+    }
+    c(MAPE = MAPE, RMSE = RMSE(data$obs, data$pred), Rsquared = R2(data$obs, data$pred))
+  }
+  
+  # Define 10-fold cross-validation
+  train_control <- trainControl(method = "cv", number = 10, summaryFunction = custom_summary)
+  final_formula <- formula(model_re)
+  backward_cv <- train(
+    final_formula,
+    data = train_data, 
+    method = "lm",
+    trControl = train_control, # Cross-validation control
+  )
+  
+  # Extract cross-validated metrics
+  cat("Model:", deparse(model_re$call$formula), "\n")
+  cat("CV R^2:", backward_cv$results$Rsquared, "\n")
+  cat("CV RMSE:", backward_cv$results$RMSE, "\n")
+  cat("CV MAPE:", backward_cv$results$MAPE, "\n")
+}
+```
+
+### Stepwise Selection with Cross Validation to validate the performance
+```{r}
+print("Stepwise Selection")
+
+for (k in 8:19) {
+  cat("\n")
+  print(paste("Target variable: ", colnames(tab)[k]))
+  
+  # Remove outliers of output variable "k"
+  outliers =  detect_outliers(tab[, k])
+  
+  # subset the data to remove outliers and contain only input variables(col 1:7 and k-th target variable)
+  new_data = tab[!outliers, c(1:7, k)]  
+  
+  # split data in 80:20 ratio
+  set.seed(4)
+  n = nrow(new_data)
+  train_index = sample(1:n, size = floor(0.8 * n))
+  train_data = new_data[train_index, ]
+  test_data = new_data[-train_index, ]
+  
+  #define the response variable and predictor variables
+  target_variable = colnames(tab)[k]
+  
+  #train the model on the training set
+  model_init = lm(as.formula(paste(target_variable, "~ 1")), data = train_data)
+  model_full = lm(as.formula(paste(target_variable, "~ .")), data = train_data)
+  
+  #perform stepwise regression
+  model_re = step(model_init, direction = "both", scope = list(lower = model_init, upper = model_full), trace = FALSE)
+  
+  # Define a custom summary function to include MAPE
+  custom_summary <- function(data, lev = NULL, model = NULL) {
+    if (all(data$obs != 0)){
+      MAPE <- mean(abs((data$obs - data$pred) / (data$obs)))
+    } else{
+      MAPE <- mean(abs((data$obs - data$pred) / (data$obs + 0.01)))
+    }
+    c(MAPE = MAPE, RMSE = RMSE(data$obs, data$pred), Rsquared = R2(data$obs, data$pred))
+  }
+  
+  # Define 10-fold cross-validation
+  train_control <- trainControl(method = "cv", number = 10, summaryFunction = custom_summary)
+  final_formula <- formula(model_re)
+  stepwise_cv <- train(
+    final_formula,
+    data = train_data, 
+    method = "lm",
+    trControl = train_control, # Cross-validation control
+  )
+  
+  # Extract cross-validated metrics
+  cat("Model:", deparse(model_re$call$formula), "\n")
+  cat("CV R^2:", stepwise_cv$results$Rsquared, "\n")
+  cat("CV RMSE:", stepwise_cv$results$RMSE, "\n")
+  cat("CV MAPE:", stepwise_cv$results$MAPE, "\n")
+}
+```
+
+By looking at the evaluation of each model, we can see that among those target variables, "Lifetime.People.who.have.liked.your.Page.and.engaged.with.your.post" give the least MAPE so we will use this model for further model diagnostics.
+
+First, we re-run the model:
+the Lifetime.People.who.have.liked.your.Page.and.engaged.with.your.post  ~  Type + Post.Month + Page.total.likes + Paid 
+
+```{r}
+k = 15
+
+# Remove outliers of output variable "k"
+outliers =  detect_outliers(tab[, k])
+
+# subset the data to remove outliers and contain only input variables(col 1:7 and k-th target variable)
+new_data = tab[!outliers, c(1:7, k)]  
+
+# split data in 80:20 ratio
+set.seed(4)
+n = nrow(new_data)
+train_index = sample(1:n, size = floor(0.8 * n))
+train_data = new_data[train_index, ]
+test_data = new_data[-train_index, ]
+
+#define the response variable and predictor variables
+target_variable = colnames(tab)[k]
+
+#train the model on the training set
+model_init = lm(as.formula(paste(target_variable, "~ 1")), data = train_data)
+model_full = lm(as.formula(paste(target_variable, "~ .")), data = train_data)
+
+#perform stepwise regression
+model_re = step(model_init, direction = "both", scope = list(lower = model_init, upper = model_full), trace = FALSE)
+
+# Define a custom summary function to include MAPE
+custom_summary <- function(data, lev = NULL, model = NULL) {
+  if (all(data$obs != 0)){
+    MAPE <- mean(abs((data$obs - data$pred) / (data$obs)))
+  } else{
+    MAPE <- mean(abs((data$obs - data$pred) / (data$obs + 0.01)))
+  }
+  c(MAPE = MAPE, RMSE = RMSE(data$obs, data$pred), Rsquared = R2(data$obs, data$pred))
+}
+
+# Define 10-fold cross-validation
+train_control <- trainControl(method = "cv", number = 10, summaryFunction = custom_summary)
+final_formula <- formula(model_re)
+stepwise_cv <- train(
+  final_formula,
+  data = train_data, 
+  method = "lm",
+  trControl = train_control, # Cross-validation control
+)
+
+# Extract cross-validated metrics
+cat("Model:", deparse(model_re$call$formula), "\n")
+cat("CV R^2:", stepwise_cv$results$Rsquared, "\n")
+cat("CV RMSE:", stepwise_cv$results$RMSE, "\n")
+cat("CV MAPE:", stepwise_cv$results$MAPE, "\n")
+```
+
+```{r}
+#function to compute tested R-squared (R^2)
+compute_r_squared <- function(y_true, y_pred) {
+  # Residual Sum of Squares (RSS)
+  RSS = sum((y_true - y_pred)^2)
+  
+  # Total Sum of Squares (TSS)
+  TSS = sum((y_true - mean(y_true))^2)
+  
+  # R-squared
+  R2 = 1 - (RSS / TSS)
+  return(R2)
+}
+```
+
+
+```{r}
+fitted_values <- predict(stepwise_cv, newdata = test_data)
+
+real_values <- test_data[, 8]  # Replace target_variable with your actual target variable name
+
+RMSE = sqrt(mean(abs((real_values - fitted_values)))^2)
+MAPE = mean(abs((real_values - fitted_values) / real_values))
+R_2 = compute_r_squared(real_values, fitted_values)
+
+cat("Stepwise Regression", "\n")
+cat("RMSE =", RMSE, "\n")
+cat("MAPE =", MAPE, "\n")
+cat("Tested R_square", R_2, "\n")
+
+ggplot(data = data.frame(fitted = fitted_values, real = real_values), aes(x = real, y = fitted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "red") +  # Line of perfect fit
+  labs(title = "Stepwise Regression Model",
+       x = "Real Values",
+       y = "Fitted Values") +
+  theme_minimal() +
+  xlim(0, max(real_values)) +
+  ylim(0, max(fitted_values))
+```
+
+## Model Diagnostics
+### Checking Normality Assumption
+
+We check the normality assumption of the residual of linear regression model obtain from the model selection:
+
+```{r}
+#Shapiro-Wilk Test for residuals
+cat("\nStepwise Forward Selection - Shapiro-Wilk Test for Residuals:\n")
+residuals = real_values - fitted_values
+
+print(shapiro.test(residuals))
+
+#Q-Q Plot
+qqnorm(residuals, main = "Q-Q Plot for Stepwise Residuals")
+qqline(residuals)
+```
+
+Since the QQ Plot and the Shapiro Wilk Test shows that the residual of the model does not follow normallity distribution, so we try to apply the log transformation on output variable.
+
+Model: Lifetime.People.who.have.liked.your.Page.and.engaged.with.your.post ~ Type + Post.Month + Page.total.likes + Paid 
+
+### Applying Log transformation on the target variable
+
+```{r}
+#define the response variable and predictor variables
+target_variable = colnames(train_data)[8]
+
+train_data[, 8] = log(train_data[, 8])
+test_data[, 8] = log(test_data[, 8])
+
+#train the model on the training set
+model_init = lm(as.formula(paste(target_variable, "~ 1")), data = train_data)
+model_full = lm(as.formula(paste(target_variable, "~ .")), data = train_data)
+
+#perform stepwise regression
+model_re = step(model_init, direction = "both", scope = list(lower = model_init, upper = model_full), trace = FALSE)
+
+# Define a custom summary function to include MAPE
+custom_summary <- function(data, lev = NULL, model = NULL) {
+  if (all(data$obs != 0)){
+    MAPE <- mean(abs((data$obs - data$pred) / (data$obs)))
+  } else{
+    MAPE <- mean(abs((data$obs - data$pred) / (data$obs + 0.01)))
+  }
+  c(MAPE = MAPE, RMSE = RMSE(data$obs, data$pred), Rsquared = R2(data$obs, data$pred))
+}
+
+# Define 10-fold cross-validation
+train_control <- trainControl(method = "cv", number = 10, summaryFunction = custom_summary)
+final_formula <- formula(model_re)
+stepwise_cv <- train(
+  final_formula,
+  data = train_data, 
+  method = "lm",
+  trControl = train_control, # Cross-validation control
+)
+
+# Extract cross-validated metrics
+cat("Model:", deparse(model_re$call$formula), "\n")
+cat("CV R^2:", stepwise_cv$results$Rsquared, "\n")
+cat("CV RMSE:", stepwise_cv$results$RMSE, "\n")
+cat("CV MAPE:", stepwise_cv$results$MAPE, "\n")
+
+#Shapiro-Wilk Test for residuals
+cat("\nStepwise Forward Selection - Shapiro-Wilk Test for Residuals:\n")
+fitted_values <- predict(stepwise_cv, newdata = log(test_data + 1)) 
+residuals = log(real_values + 1) - fitted_values
+print(shapiro.test(residuals))
+
+#Q-Q Plot
+qqnorm(residuals, main = "Q-Q Plot for Stepwise Residuals After Log Transformation")
+qqline(residuals)
+```
+```{r}
+fitted_values <- predict(stepwise_cv, newdata = test_data)
+
+real_values <- test_data[, 8]
+
+RMSE = sqrt(mean(abs((real_values - fitted_values)))^2)
+MAPE = mean(abs((real_values - fitted_values) / real_values))
+R_2 = compute_r_squared(real_values, fitted_values)
+
+cat("Stepwise Regression", "\n")
+cat("RMSE =", RMSE, "\n")
+cat("MAPE =", MAPE, "\n")
+cat("Tested R_square", R_2, "\n")
+
+ggplot(data = data.frame(fitted = fitted_values, real = real_values), aes(x = real, y = fitted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "red") +  # Line of perfect fit
+  labs(title = "Stepwise Regression After Log Transformation",
+       x = "Real Values",
+       y = "Fitted Values") +
+  theme_minimal() +
+  xlim(min(real_values, fitted_values), max(real_values, fitted_values)) +
+  ylim(min(real_values, fitted_values), max(real_values, fitted_values))
+```
+
+
+## Ridge and Lasso Regression
+
+```{r}
+#Ridge Regression
+x_train = as.matrix(train_data[, 1:7])
+y_train = train_data[, target_variable]
+x_test = as.matrix(test_data[, 1:7])
+y_test = test_data[, target_variable]
+
+# Use cross validation to get the best optimal lambda
+ridge_model = cv.glmnet(x_train, y_train, alpha = 0)  # Ridge
+ridge_pred = predict(ridge_model, s = "lambda.min", newx = x_test)
+RMSE_ridge = sqrt(mean(abs((y_test - ridge_pred)))^2)
+MAPE_ridge = mean(abs((y_test - ridge_pred) / y_test))
+R2_ridge = compute_r_squared(y_test, ridge_pred)
+
+
+cat("\nRidge Regression - Results:\n")
+cat("Optimal Lambda (Ridge):", ridge_model$lambda.min, "\n")
+cat("RMSE:", RMSE_ridge, "\n")
+cat("Mean Absolute Percentage Error (MAPE):", MAPE_ridge, "\n")
+cat("Tested R-squared (R2):", R2_ridge, "\n")
+
+# Residual diagnostics for Ridge
+ridge_residuals = y_test - ridge_pred
+cat("\nShapiro-Wilk Test for Residuals (Ridge):\n")
+print(shapiro.test(ridge_residuals))
+qqnorm(ridge_residuals, main = "Q-Q Plot for Ridge Residuals")
+qqline(ridge_residuals)
+
+plot(ridge_model)
+ridge <- glmnet(x_train, y_train, alpha = 0)
+plot(ridge, xvar = 'lambda')
+legend("topright", lwd = 1, col = 1:6, legend = colnames(x_train), cex = .7)
+
+### Lasso Regression
+# Use cross validation to get the best optimal lambda
+lasso_model = cv.glmnet(x_train, y_train, alpha = 1)  # Lasso
+lasso_pred = predict(lasso_model, s = "lambda.min", newx = x_test)
+RMSE_lasso = sqrt(mean(abs((y_test - lasso_pred)))^2)
+MAPE_lasso = mean(abs((y_test - lasso_pred) / y_test))
+R2_lasso = compute_r_squared(y_test, lasso_pred)
+
+cat("\nLasso Regression - Results:\n")
+cat("Optimal Lambda (Lasso):", lasso_model$lambda.min, "\n")
+cat("RMSE lasso:", RMSE_lasso, "\n")
+cat("Mean Absolute Percentage Error (MAPE):", MAPE_lasso, "\n")
+cat("Tested R-squared (R2):", R2_lasso, "\n")
+
+
+# Residual diagnostics for Lasso
+lasso_residuals = y_test - lasso_pred
+cat("\nShapiro-Wilk Test for Residuals (Lasso):\n")
+print(shapiro.test(lasso_residuals))
+qqnorm(lasso_residuals, main = "Q-Q Plot for Lasso Residuals")
+qqline(lasso_residuals)
+
+plot(lasso_model)
+lasso <- glmnet(x_train, y_train, alpha = 1)
+plot(lasso, xvar = 'lambda')
+legend("topright", lwd = 1, col = 1:6, legend = colnames(x_train), cex = .7)
+```
+
+
+```{r}
+fitted_values <- ridge_pred
+
+real_values <- y_test
+
+ggplot(data = data.frame(fitted = fitted_values[1:88], real = real_values), aes(x = real, y = fitted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "red") +  # Line of perfect fit
+  labs(title = "Ridge Regression",
+       x = "Real Values",
+       y = "Fitted Values") +
+  theme_minimal() +
+  xlim(min(real_values, fitted_values), max(real_values, fitted_values)) +
+  ylim(min(real_values, fitted_values), max(real_values, fitted_values))
+```
+
+
+```{r}
+fitted_values <- lasso_pred
+
+real_values <- y_test
+
+ggplot(data = data.frame(fitted = fitted_values[1:88], real = real_values), aes(x = real, y = fitted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "red") +  # Line of perfect fit
+  labs(title = "Lasso Regression",
+       x = "Real Values",
+       y = "Fitted Values") +
+  theme_minimal() +
+  xlim(min(real_values, fitted_values), max(real_values, fitted_values)) +
+  ylim(min(real_values, fitted_values), max(real_values, fitted_values))
+```
+
+
+## Importance of each subset of categorical variable of the final model
+## One Hot Encoding
+```{r}
+coef(ridge_model)
+```
+
+
+```{r}
+coef(lasso_model)
+```
+
+We saw that Ridge and Lasso gave similar performance evaluation, but lasso use variable selection rather than using all variables. So we use the final model which is lasso regression to do one hot encoding to know how important of each variable in the final model.
+
+Lifetime.People.who.have.liked.your.Page.and.engaged.with.your.post = 5.57586698 + 0.23058167 $\times$ Type - 0.02227536 $\times$ Post.Months
+
+```{r}
+tab = read.table("D:\\ENSIIE_M1\\MERRE\\Projet\\dataset.csv", header = T, sep = ";")
+tab = na.omit(tab)
+
+new_tab <- tab
+
+new_tab$Type = as.factor(new_tab$Type)
+new_tab = new_tab %>% mutate(Post.Month = recode(Post.Month, `1` = 'Jan', `2` = 'Feb', `3` = 'Mar', `4` = 'Apr', `5` = 'May', `6` = 'Jun', `7` = 'Jul', `8` = 'Aug', `9` = 'Sep', `10` = 'Oct', `11` = 'Nov', `12` = 'Dec'))
+new_tab$Post.Month = factor(new_tab$Post.Month, levels = c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"))
+
+dummies = dummyVars(~ Type + Post.Month, data = new_tab)
+encode_matrix = predict(dummies, newdata = new_tab)
+
+encode_tab = as.data.frame(encode_matrix)
+encode_tab$Lifetime.People.who.have.liked.your.Page.and.engaged.with.your.post = tab$Lifetime.People.who.have.liked.your.Page.and.engaged.with.your.post
+
+head(encode_tab)
+```
+
+
+```{r}
+reg = lm(Lifetime.People.who.have.liked.your.Page.and.engaged.with.your.post ~ ., data = encode_tab)
+summary(reg)
+```
+
+By the summary table above, we observed that Link, Photo, Status type of post, and February and April post month variables are statistically significant, meaning it has a significant impact on Lifetime.People.who.have.liked.your.Page.and.engaged.with.your.post. 
+
+The negative coefficients for Type.Link and Type.Photo imply that, on average, posts with links or photos are predicted to have lower engagement compared to posts without them. Meanwhile, post with Status tends to have more engagement than other types. Also, posts published in February and April tend to have significantly higher engagement compared to other months.
+
+## Ridge and Lasso Regression (On One Hot encoding Data)
+
+Since Ridge and Lasso works better with large number of predicted variable, we will use it on the one-hot encoding data.
+
+```{r}
+# split data in 80:20 ratio
+set.seed(4)
+n = nrow(encode_tab)
+train_index = sample(1:n, size = floor(0.8 * n))
+train_encode_data = encode_tab[train_index, ]
+test_encode_data = encode_tab[-train_index, ]
+  
+X_train = as.matrix(train_encode_data[, 1:16])
+Y_train = log(train_encode_data[, 17])
+X_test = as.matrix(test_encode_data[, 1:16])
+Y_test = log(test_encode_data[, 17])
+```
+
+```{r}
+# Use cross validation to get the best optimal lambda
+ridge_model = cv.glmnet(X_train, Y_train, alpha = 0)  # Ridge
+ridge_pred = predict(ridge_model, s = "lambda.min", newx = X_test)
+RMSE_ridge = sqrt(mean(abs((Y_test - ridge_pred)))^2)
+MAPE_ridge = mean(abs((Y_test - ridge_pred) / Y_test))
+R2_ridge = compute_r_squared(Y_test, ridge_pred)
+
+cat("\nRidge Regression - Results:\n")
+cat("Optimal Lambda (Ridge):", ridge_model$lambda.min, "\n")
+cat("RMSE:", RMSE_ridge, "\n")
+cat("Mean Absolute Percentage Error (MAPE):", MAPE_ridge, "\n")
+cat("Tested R-squared (R2):", R2_ridge, "\n")
+```
+
+
+```{r}
+### Lasso Regression
+# Use cross validation to get the best optimal lambda
+lasso_model = cv.glmnet(X_train, Y_train, alpha = 1)  # Lasso
+lasso_pred = predict(lasso_model, s = "lambda.min", newx = X_test)
+RMSE_lasso = sqrt(mean(abs((Y_test - lasso_pred)))^2)
+MAPE_lasso = mean(abs((Y_test - lasso_pred) / y_test))
+R2_lasso = compute_r_squared(Y_test, lasso_pred)
+
+cat("\nLasso Regression - Results:\n")
+cat("Optimal Lambda (Lasso):", lasso_model$lambda.min, "\n")
+cat("RMSE lasso:", RMSE_lasso, "\n")
+cat("Mean Absolute Percentage Error (MAPE):", MAPE_lasso, "\n")
+cat("Tested R-squared (R2):", R2_lasso, "\n")
+```
+
+
+## Elastic Net Regression (On One Hot encoding Data)
+We want to improve our final model, we will use elastic net regression here. Elastic net linear regression uses the penalties from both the lasso and ridge techniques to regularize regression models. Since glmnet library can only choosing optimal lambda via cross validation by fixing alpha. We use cross validation from caret library to find both optimal lambda and alpha.
+
+```{r}
+# Set training control
+train_control <- trainControl(method = "repeatedcv",
+                              number = 10,
+                              repeats = 5,
+                              search = "random",
+                              verboseIter = FALSE)
+
+# Train the model
+elastic_net_model <- train(Y_train ~ .,
+                           data = cbind(X_train, Y_train),
+                           method = "glmnet",
+                           # preProcess = c("center", "scale"),
+                           tuneLength = 25,
+                           trControl = train_control,
+                           trace = FALSE)
+
+elastic_pred = predict(elastic_net_model, X_test)
+RMSE_elastic = sqrt(mean(abs((Y_test - elastic_pred)))^2)
+MAPE_elastic = mean(abs((Y_test - elastic_pred) / Y_test))
+R2_elastic = compute_r_squared(Y_test, elastic_pred)
+
+cat("\nElastic Net Regression - Results:\n")
+cat("best alpha and lambda \n", deparse(elastic_net_model$bestTune), "\n")
+cat("RMSE:", RMSE_elastic, "\n")
+cat("Mean Absolute Percentage Error (MAPE):", MAPE_elastic, "\n")
+cat("Tested R-squared (R2):", R2_elastic, "\n")
+```
+
+```{r}
+plot(elastic_net_model)
+```
+
+```{r}
+fitted_values <- elastic_pred
+
+real_values <- Y_test
+
+ggplot(data = data.frame(fitted = fitted_values[1:99], real = real_values), aes(x = real, y = fitted)) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "red") +  # Line of perfect fit
+  labs(title = "Elastic Net Regression",
+       x = "Real Values",
+       y = "Fitted Values") +
+  theme_minimal() +
+  xlim(min(real_values, fitted_values), max(real_values, fitted_values)) +
+  ylim(min(real_values, fitted_values), max(real_values, fitted_values))
+```
+
+
+
