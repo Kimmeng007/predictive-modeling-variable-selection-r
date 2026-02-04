@@ -1,4 +1,4 @@
-# Predictive Modeling & Variable Selection (R Project)
+# Social Media Engagement Modeling (R Project)
 
 This project explores **predictive modeling and variable selection techniques** using R. The goal is to **identify the most suitable target variable** and evaluate model performance using **forward, backward, and stepwise regression with cross-validation**. The analysis is based on a dataset of social media post metrics and focuses on **robust preprocessing, outlier handling, and model evaluation**.
 
